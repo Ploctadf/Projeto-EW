@@ -4,6 +4,7 @@ const path = require('path')
 const Resource = require('../../models/Resource')
 const { getDipZipPath } = require('./dip')
 const { optionalAuth } = require('../../middleware/auth')
+const { config } = require('../../lib/config')
 const { jsonError, isMongoId } = require('../../lib/http')
 
 const router = express.Router()
@@ -12,7 +13,7 @@ const router = express.Router()
 // - recurso público  → qualquer pessoa (autenticada ou não) pode descarregar
 // - recurso privado  → só o produtor que submeteu ou um admin
 router.get('/access/:id', optionalAuth, async (req, res) => {
-	const aipDir = process.env.AIP_DIR || '/aip'
+	const aipDir = config.storage.aipDir
 
 	if (!isMongoId(req.params.id)) {
 		return jsonError(res, 400, { code: 'INVALID_ID', message: 'id inválido' })
@@ -39,7 +40,7 @@ router.get('/access/:id', optionalAuth, async (req, res) => {
 				message: 'autenticação necessária para recursos privados',
 			})
 		}
-		const isAdmin = req.user.nivel === 'admin'
+		const isAdmin = req.user.role === 'admin'
 		const isOwner = String(resource.produtor) === String(req.user.sub)
 		if (!isAdmin && !isOwner) {
 			return jsonError(res, 403, { code: 'FORBIDDEN', message: 'acesso negado' })

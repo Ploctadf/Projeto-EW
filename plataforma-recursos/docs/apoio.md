@@ -2,25 +2,31 @@
 
 > **Objetivo:** consulta direta para dúvidas de implementação, arquitetura e decisões.
 >
-> **Atualizado em:** 2026-04-06
+> **Atualizado em:** 2026-04-24
 
 ## Decisões vigentes (resumo)
 
 - Arquitetura: `gateway` (entrada), `auth` (identidade), `api` (domínio), `interface` (UI).
 - Segurança: autorização sempre no backend; UI apenas apoia UX.
 - Padrão de código: rotas pequenas + helpers partilhados + validação precoce + erros consistentes.
+- Configuração: `docker-compose.yml` com não sensíveis hardcoded e sensíveis via `.env`; leitura no código centralizada por serviço em `lib/config.js`.
+- Resiliência: `api` e `auth` arrancam apenas após ligação ao MongoDB; falha de ligação termina o processo.
+- Estado de autenticação: access token + refresh token, com renovação automática na interface em pedidos à API.
 
 ## Pendentes prioritários (implementação)
 
-- Filtros avançados em recursos.
-- Edição de post e remoção de comentário na UI.
-- Hardening: `helmet`, rate limit login, CORS explícito, validação/sanitização.
-- Testes mínimos unitários e integração.
+- Hardening adicional: `helmet`, rate limit login e auditoria de CORS por ambiente.
+- Testes mínimos unitários e integração (API/Auth/Interface).
+- Cobertura adicional de validação/sanitização de inputs em rotas menos críticas.
 
-**Notas recentes (2026-04-06):**
+**Notas recentes (2026-04-24):**
 
 - Fluxo OAIS fechado na UI: upload SIP (produtor/admin) e download DIP (público e privado com autorização).
 - Gateway encaminha páginas HTML de auth (`/auth/login`, `/auth/register`, `/auth/logout`) para a Interface; endpoints JSON continuam no serviço Auth.
+- API aceita token por header, cookie e query string (compatibilidade).
+- Sessão web da interface implementada e configurável por `SESSION_COOKIE_NAME`.
+
+> Nota: as secções detalhadas abaixo mantêm histórico técnico de decisões e podem conter pontos que já foram ultrapassados pelo estado atual. Em caso de conflito, prevalecem este resumo e o README principal.
 
 ## Critério para decidir entre alternativas
 
@@ -53,7 +59,7 @@ Preferir sempre a opção que, por esta ordem:
 
 - Decisão: aplicar autenticação/autorização no backend para operações críticas.
 - Fundamentação: regras de acesso do enunciado (admin/produtor/consumidor) + princípio do menor privilégio.
-- Evidência: [services/auth/middleware/auth.js](../services/auth/middleware/auth.js), [services/api/middleware/auth.js](../services/api/middleware/auth.js)
+- Evidência: [services/auth/auth/auth.js](../services/auth/auth/auth.js), [services/api/middleware/auth.js](../services/api/middleware/auth.js)
 
 ### P4. Soluções simples primeiro (MVP sólido)
 
@@ -216,7 +222,7 @@ Preferir sempre a opção que, por esta ordem:
 
 - evita configuração insegura em produção/demonstração.
 
-**Evidência no código:** [services/auth/routes/sessions.js](../services/auth/routes/sessions.js), [services/auth/routes/index.js](../services/auth/routes/index.js), [services/auth/middleware/auth.js](../services/auth/middleware/auth.js)
+**Evidência no código:** [services/auth/routes/sessions.js](../services/auth/routes/sessions.js), [services/auth/routes/index.js](../services/auth/routes/index.js), [services/auth/auth/auth.js](../services/auth/auth/auth.js)
 
 ---
 
@@ -235,7 +241,7 @@ Preferir sempre a opção que, por esta ordem:
 
 - garante enforcement de regras de acesso no backend (não só na UI).
 
-**Evidência no código:** [services/auth/routes/users.js](../services/auth/routes/users.js), [services/auth/middleware/auth.js](../services/auth/middleware/auth.js)
+**Evidência no código:** [services/auth/routes/users.js](../services/auth/routes/users.js), [services/auth/auth/auth.js](../services/auth/auth/auth.js)
 
 ---
 
@@ -517,7 +523,7 @@ Base pública: `/*`
 
 Base no gateway: `/auth/*`
 
-**Evidência:** [services/auth/routes/index.js](../services/auth/routes/index.js), [services/auth/routes/users.js](../services/auth/routes/users.js), [services/auth/routes/sessions.js](../services/auth/routes/sessions.js), [services/auth/middleware/auth.js](../services/auth/middleware/auth.js)
+**Evidência:** [services/auth/routes/index.js](../services/auth/routes/index.js), [services/auth/routes/users.js](../services/auth/routes/users.js), [services/auth/routes/sessions.js](../services/auth/routes/sessions.js), [services/auth/auth/auth.js](../services/auth/auth/auth.js)
 
 ### 7.2.1 `POST /auth/register`
 
@@ -540,9 +546,21 @@ Base no gateway: `/auth/*`
 ### 7.2.3 `GET /auth/sessions/verify`
 
 - **Descrição:** valida token e devolve payload.
-- **Auth:** Bearer token obrigatório.
+- **Auth:** Bearer token obrigatório **ou** cookie httpOnly (`AUTH_COOKIE_NAME`).
 - **Resposta:** `200 { ok: true, payload }`.
 - **Erros típicos:** `401` (ausente, inválido ou expirado).
+
+### 7.2.3.1 `POST /auth/sessions/logout`
+
+- **Descrição:** limpa cookie de autenticação (modo browser).
+- **Auth:** não.
+- **Resposta:** `200 { ok: true }`.
+
+### 7.2.8 CORS no serviço Auth
+
+- **Descrição:** o serviço Auth permite origem configurável para uso com JWT em cookie.
+- **Configuração:** `AUTH_CORS_ORIGIN` (ex.: `http://localhost:16020`).
+- **Headers/métodos:** `Content-Type`, `Authorization`, `X-Request-Id`; métodos `GET, POST, PUT, PATCH, DELETE, OPTIONS`.
 
 ### 7.2.4 `GET /auth/me`
 

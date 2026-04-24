@@ -1,77 +1,141 @@
-const express = require('express')
-const jwt = require('jsonwebtoken')
+/**
+ * routes/sessions.js
+ *
+ * POST /sessions          — login  (emite access token + refresh token em cookie HttpOnly)
+ * GET  /sessions/verify   — valida access token (usado internamente pelos outros serviços)
+ * POST /sessions/refresh  — troca o refresh token por um novo access token (sem novo login)
+ * POST /sessions/logout   — invalida os dois cookies
+ */
 
+const express = require('express')
+
+const UserCtrl = require('../controllers/user')
 const User = require('../models/User')
+const auth = require('../auth/auth')
 const { jsonError } = require('../lib/http')
+const { config } = require('../lib/config')
+const { validarCampoObrigatorioNoBody, validarPedidoLoginNoBody } = require('../middleware/validate')
+const {
+	signAccessToken,
+	signRefreshToken,
+	verifyRefreshToken,
+	buildAuthCookieOptions,
+	buildRefreshCookieOptions,
+	REFRESH_COOKIE,
+} = require('../lib/jwt')
 
 const router = express.Router()
 
-const JWT_SECRET = process.env.JWT_SECRET
-const JWT_EXPIRES = process.env.JWT_EXPIRES || '24h'
-
-if (!JWT_SECRET) {
-	throw new Error('JWT_SECRET em falta. Define JWT_SECRET no ambiente para arrancar o serviço auth.')
-}
-
-// POST /auth/sessions  →  login
-// Body: { email, password }
-// Devolve: { ok, token, user }
-router.post('/', async (req, res) => {
+// ─────────────────────────────────────────────
+// POST /sessions  →  login
+// ─────────────────────────────────────────────
+router.post('/', validarPedidoLoginNoBody(), async (req, res) => {
 	try {
-		const { email, password } = req.body
-		if (!email || !password) {
-			return jsonError(res, 400, { code: 'INVALID_INPUT', message: 'email e password são obrigatórios' })
-		}
+		const { email, username, password } = req.body
+		const identifier = email || username
 
-		const user = await User.findOne({ email })
-		if (!user) {
-			return jsonError(res, 401, { code: 'INVALID_CREDENTIALS', message: 'credenciais inválidas' })
-		}
+		const dados = await UserCtrl.login(identifier, password)
 
-		const valid = await user.checkPassword(password)
-		if (!valid) {
-			return jsonError(res, 401, { code: 'INVALID_CREDENTIALS', message: 'credenciais inválidas' })
-		}
+		// Emitir refresh token em cookie HttpOnly separado
+		const refreshToken = signRefreshToken(dados.user)
+		res.cookie(REFRESH_COOKIE, refreshToken, buildRefreshCookieOptions())
 
-		// Atualizar dataUltimoAcesso sem disparar hooks
-		await User.updateOne({ _id: user._id }, { dataUltimoAcesso: new Date() })
-
-		const payload = {
-			sub: String(user._id),
-			email: user.email,
-			nivel: user.nivel,
-			nome: user.nome,
-		}
-
-		const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES })
-
-		res.json({ ok: true, token, user })
+		// Access token no cookie normal (modo browser) e no JSON (modo API)
+		res.cookie(config.cookies.name, dados.token, buildAuthCookieOptions())
+		res.json({ ok: true, token: dados.token, refreshToken, user: dados.user })
 	} catch (err) {
-		console.error('[auth] login error:', err)
+		const msg = String(err?.message || '').toLowerCase()
+		if (msg.includes('desativada')) {
+			return jsonError(res, 403, { code: 'ACCOUNT_DISABLED', message: 'conta desativada' })
+		}
+		if (msg.includes('nao encontrado') || msg.includes('incorreta') || msg.includes('invalidas')) {
+			return jsonError(res, 401, { code: 'INVALID_CREDENTIALS', message: 'credenciais invalidas' })
+		}
 		jsonError(res, 500, { code: 'INTERNAL_ERROR', message: 'erro interno' })
 	}
 })
 
-// GET /auth/sessions/verify  →  valida token e devolve payload
-// Usado internamente pelos outros serviços (API, Interface)
-// Header: Authorization: Bearer <token>
-router.get('/verify', (req, res) => {
-	try {
-		const authHeader = req.headers['authorization'] || ''
-		const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+// ─────────────────────────────────────────────
+// GET /sessions/verify  →  valida access token
+// Usado internamente pelos outros serviços.
+// ─────────────────────────────────────────────
+router.get('/verify', auth.verificaAcesso, (req, res) => {
+	res.json({ ok: true, payload: req.user })
+})
 
-		if (!token) {
-			return jsonError(res, 401, { code: 'TOKEN_MISSING', message: 'token ausente' })
-		}
-
-		const payload = jwt.verify(token, JWT_SECRET)
-		res.json({ ok: true, payload })
-	} catch (err) {
-		if (err.name === 'TokenExpiredError') {
-			return jsonError(res, 401, { code: 'TOKEN_EXPIRED', message: 'token expirado' })
-		}
-		jsonError(res, 401, { code: 'INVALID_TOKEN', message: 'token inválido' })
+// ─────────────────────────────────────────────
+// POST /sessions/refresh  →  emite novo access token a partir do refresh token
+// O refresh token é lido do cookie HttpOnly; nunca é enviado no body.
+// ─────────────────────────────────────────────
+router.post('/refresh', async (req, res) => {
+	const refreshToken = req.cookies?.[REFRESH_COOKIE]
+	if (!refreshToken) {
+		return jsonError(res, 401, { code: 'REFRESH_TOKEN_MISSING', message: 'refresh token ausente' })
 	}
+
+	let payload
+	try {
+		payload = verifyRefreshToken(refreshToken)
+	} catch {
+		return jsonError(res, 401, { code: 'REFRESH_TOKEN_INVALID', message: 'refresh token inválido ou expirado' })
+	}
+
+	// Garantir que o utilizador ainda existe e está ativo
+	const user = await User.findById(payload.sub)
+	if (!user || !user.ativo) {
+		return jsonError(res, 401, { code: 'ACCOUNT_DISABLED', message: 'conta inexistente ou desativada' })
+	}
+
+	// Emitir novo access token
+	const newAccessToken = signAccessToken(user)
+	res.cookie(config.cookies.name, newAccessToken, buildAuthCookieOptions())
+
+	res.json({ ok: true, token: newAccessToken })
+})
+
+// ─────────────────────────────────────────────
+// POST /sessions/refresh-server  →  emite novo access token com refresh token no body
+// Usado pelo serviço interface para renovação automática em server-side.
+// ─────────────────────────────────────────────
+router.post(
+	'/refresh-server',
+	validarCampoObrigatorioNoBody('refreshToken', {
+		status: 401,
+		code: 'REFRESH_TOKEN_MISSING',
+		message: 'refresh token ausente',
+	}),
+	async (req, res) => {
+	const refreshToken = req.body?.refreshToken
+
+	let payload
+	try {
+		payload = verifyRefreshToken(refreshToken)
+	} catch {
+		return jsonError(res, 401, { code: 'REFRESH_TOKEN_INVALID', message: 'refresh token inválido ou expirado' })
+	}
+
+	const user = await User.findById(payload.sub)
+	if (!user || !user.ativo) {
+		return jsonError(res, 401, { code: 'ACCOUNT_DISABLED', message: 'conta inexistente ou desativada' })
+	}
+
+	const newAccessToken = signAccessToken(user)
+	res.json({ ok: true, token: newAccessToken })
+})
+
+// ─────────────────────────────────────────────
+// POST /sessions/logout  →  limpa os dois cookies
+// ─────────────────────────────────────────────
+router.post('/logout', (req, res) => {
+	res.clearCookie(config.cookies.name, {
+		domain: config.cookies?.domain,
+		path:   config.cookies?.path || '/',
+	})
+	res.clearCookie(REFRESH_COOKIE, {
+		domain: config.cookies?.domain,
+		path:   '/sessions/refresh',
+	})
+	res.json({ ok: true })
 })
 
 module.exports = router
