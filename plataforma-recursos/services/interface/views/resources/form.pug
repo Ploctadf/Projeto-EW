@@ -1,0 +1,16 @@
+extends ../layout
+
+block content
+	section.w3-card.w3-white.w3-padding.w3-margin-top
+		h1 Submeter recurso
+		p
+			| A criação de recursos é feita através do fluxo OAIS (SIP → AIP).
+			|  Submeta aqui um ficheiro ZIP (SIP) válido.
+
+		form(action='/resources/new' method='post' enctype='multipart/form-data')
+			label(for='sip') Ficheiro SIP (ZIP)
+			input#sip.w3-input(type='file' name='sip' accept='.zip,application/zip' required)
+			button.w3-button.w3-teal(type='submit') Submeter
+		p
+			a.w3-button.w3-border(href='/resources') Voltar aos recursos
+
