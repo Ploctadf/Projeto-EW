@@ -6,6 +6,7 @@ const { getDipZipPath } = require('./dip')
 const { optionalAuth } = require('../../middleware/auth')
 const { config } = require('../../lib/config')
 const { jsonError, isMongoId } = require('../../lib/http')
+const { publishTop3NewsIfChanged } = require('../../lib/systemNewsJob')
 
 const router = express.Router()
 
@@ -59,6 +60,16 @@ router.get('/access/:id', optionalAuth, async (req, res) => {
 	const filename = `resource-${req.params.id}.zip`
 	res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
 	res.setHeader('Content-Type', 'application/zip')
+
+	try {
+		await Resource.updateOne({ _id: resource._id }, { $inc: { downloadCount: 1 } })
+		publishTop3NewsIfChanged().catch((err) => {
+			console.error('[api][access] warning: could not publish top3 news after download:', err)
+		})
+	} catch (err) {
+		console.error('[api][access] warning: could not increment downloadCount:', err)
+	}
+
 	res.sendFile(path.resolve(zipPath))
 })
 

@@ -50,9 +50,10 @@ module.exports.list = () =>
 module.exports.findById = (id) =>
 	User.findOne({ _id: id, ativo: true }, { password: 0 }).exec()
 
-module.exports.insert = async (input) => {
-	const nome     = String(input?.nome     || '').trim()
-	const email    = String(input?.email    || '').trim().toLowerCase()
+module.exports.insert = async (input, options = {}) => {
+	const isPublicRegistration = options.publicRegistration === true
+	const nome = String(input?.nome || '').trim()
+	const email = String(input?.email || '').trim().toLowerCase()
 	const password = String(input?.password || '')
 
 	if (!nome || !email || !password) throw new Error('nome, email e password sao obrigatorios')
@@ -60,8 +61,13 @@ module.exports.insert = async (input) => {
 
 	if (await User.findOne({ email })) throw new Error('email ja registado')
 
-	const _id  = await generateUserId(input?._id || input?.username, email)
-	const role = normalizeRole(input?.role)
+	const _id = await generateUserId(input?._id || input?.username, email)
+	const role = isPublicRegistration ? 'consumidor' : normalizeRole(input?.role)
+	const nivelAcesso = isPublicRegistration
+		? undefined
+		: Number.isFinite(Number(input?.nivel_acesso))
+			? Number(input.nivel_acesso)
+			: undefined
 
 	const user = new User({
 		_id,
@@ -70,7 +76,7 @@ module.exports.insert = async (input) => {
 		password,
 		role,
 		filiacao: normalizeFiliacao(input?.filiacao),
-		nivel_acesso: Number.isFinite(Number(input?.nivel_acesso)) ? Number(input.nivel_acesso) : undefined,
+		nivel_acesso: nivelAcesso,
 		ativo: input?.ativo === undefined ? true : Boolean(input.ativo),
 	})
 
@@ -81,13 +87,13 @@ module.exports.insert = async (input) => {
 module.exports.update = async (id, input) => {
 	const update = {}
 
-	if (input?.nome        !== undefined) update.nome        = String(input.nome).trim()
-	if (input?.email       !== undefined) update.email       = String(input.email).trim().toLowerCase()
-	if (input?.filiacao    !== undefined) update.filiacao    = normalizeFiliacao(input.filiacao)
-	if (input?.role        !== undefined) update.role        = normalizeRole(input.role)
+	if (input?.nome !== undefined) update.nome = String(input.nome).trim()
+	if (input?.email !== undefined) update.email = String(input.email).trim().toLowerCase()
+	if (input?.filiacao !== undefined) update.filiacao = normalizeFiliacao(input.filiacao)
+	if (input?.role !== undefined) update.role = normalizeRole(input.role)
 	if (input?.nivel_acesso !== undefined) update.nivel_acesso = Number(input.nivel_acesso)
-	if (input?.ativo       !== undefined) update.ativo       = Boolean(input.ativo)
-	if (input?.password)                  update.password    = await bcrypt.hash(String(input.password), 10)
+	if (input?.ativo !== undefined) update.ativo = Boolean(input.ativo)
+	if (input?.password) update.password = await bcrypt.hash(String(input.password), 10)
 
 	const user = await User.findByIdAndUpdate(id, update, {
 		new: true,
@@ -104,6 +110,15 @@ module.exports.remove = async (id) => {
 		{ new: true, runValidators: true, projection: { password: 0 } }
 	)
 	return toPublicUser(user)
+}
+
+module.exports.getStats = async () => {
+	const [totalUsers, totalActiveUsers] = await Promise.all([
+		User.countDocuments({}),
+		User.countDocuments({ ativo: true }),
+	])
+
+	return { totalUsers, totalActiveUsers }
 }
 
 module.exports.login = async (identifier, password) => {

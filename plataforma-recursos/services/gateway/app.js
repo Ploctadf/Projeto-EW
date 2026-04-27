@@ -1,10 +1,21 @@
 const express = require('express')
+const swaggerUi = require('swagger-ui-express')
+const YAML = require('yamljs')
 const routes = require('./routes')
-
-const PORT = Number(process.env.PORT || 16020)
-const API_URL = process.env.API_URL || 'http://api:16025'
-const AUTH_URL = process.env.AUTH_URL || 'http://auth:16027'
-const INTERFACE_URL = process.env.INTERFACE_URL || 'http://interface:16026'
+const { config } = require('./lib/config')
+const gatewaySwaggerDocument = YAML.load('./swagger.yaml')
+const swaggerHubOptions = {
+	explorer: true,
+	swaggerOptions: {
+		urls: [
+			{ name: 'Gateway', url: '/gateway/openapi.json' },
+			{ name: 'API', url: '/api/openapi.json' },
+			{ name: 'Auth', url: '/auth/openapi.json' },
+			{ name: 'Interface', url: '/interface/openapi.json' },
+		],
+		'urls.primaryName': 'Gateway',
+	},
+}
 
 const app = express()
 
@@ -18,12 +29,30 @@ app.get('/health', (req, res) => {
 	res.json({ status: 'ok' })
 })
 
+app.use(
+	'/docs',
+	swaggerUi.serveFiles(gatewaySwaggerDocument, swaggerHubOptions),
+	swaggerUi.setup(gatewaySwaggerDocument, swaggerHubOptions)
+)
+
+app.use(
+	'/gateway/docs',
+	swaggerUi.serveFiles(gatewaySwaggerDocument),
+	swaggerUi.setup(gatewaySwaggerDocument)
+)
+app.get('/openapi.json', (req, res) => {
+	res.json(gatewaySwaggerDocument)
+})
+app.get('/gateway/openapi.json', (req, res) => {
+	res.json(gatewaySwaggerDocument)
+})
+
 app.use('/', routes)
 
-app.listen(PORT, () => {
-	console.log(`[gateway] listening on :${PORT}`)
-	console.log(`[gateway] API_URL=${API_URL}`)
-	console.log(`[gateway] AUTH_URL=${AUTH_URL}`)
-	console.log(`[gateway] INTERFACE_URL=${INTERFACE_URL}`)
+app.listen(config.port, () => {
+	console.log(`[gateway] listening on :${config.port}`)
+	console.log(`[gateway] API_URL=${config.services.apiUrl}`)
+	console.log(`[gateway] AUTH_URL=${config.services.authUrl}`)
+	console.log(`[gateway] INTERFACE_URL=${config.services.interfaceUrl}`)
 })
 
