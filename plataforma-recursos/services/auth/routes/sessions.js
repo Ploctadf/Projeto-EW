@@ -8,6 +8,7 @@
  */
 
 const express = require('express')
+const rateLimit = require('express-rate-limit') // ← NOVO
 
 const sessionsController = require('../controllers/sessionsController')
 const auth = require('../auth/auth')
@@ -15,39 +16,51 @@ const { validarCampoObrigatorioNoBody, validarPedidoLoginNoBody } = require('../
 
 const router = express.Router()
 
+// ─── Rate limit para o login ──────────────────────────────────────────────────
+// Máximo 20 tentativas por IP em 15 minutos.
+// Protege contra brute-force de passwords.
+const loginLimiter = rateLimit({  // ← NOVO
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        ok: false,
+        code: 'RATE_LIMIT',
+        message: 'demasiadas tentativas, tenta novamente mais tarde',
+    },
+})
+
 // ─────────────────────────────────────────────
 // POST /sessions  →  login
 // ─────────────────────────────────────────────
-router.post('/', validarPedidoLoginNoBody(), sessionsController.login)
+router.post('/', loginLimiter, validarPedidoLoginNoBody(), sessionsController.login) // ← loginLimiter adicionado
 
 // ─────────────────────────────────────────────
 // GET /sessions/verify  →  valida access token
-// Usado internamente pelos outros serviços.
 // ─────────────────────────────────────────────
 router.get('/verify', auth.verificaAcesso, sessionsController.verify)
 
 // ─────────────────────────────────────────────
-// POST /sessions/refresh  →  emite novo access token a partir do refresh token
-// O refresh token é lido do cookie HttpOnly; nunca é enviado no body.
+// POST /sessions/refresh  →  novo access token via cookie
 // ─────────────────────────────────────────────
 router.post('/refresh', sessionsController.refresh)
 
 // ─────────────────────────────────────────────
-// POST /sessions/refresh-server  →  emite novo access token com refresh token no body
-// Usado pelo serviço interface para renovação automática em server-side.
+// POST /sessions/refresh-server  →  novo access token via body
 // ─────────────────────────────────────────────
 router.post(
-	'/refresh-server',
-	validarCampoObrigatorioNoBody('refreshToken', {
-		status: 401,
-		code: 'REFRESH_TOKEN_MISSING',
-		message: 'refresh token ausente',
-	}),
-	sessionsController.refreshServer
+    '/refresh-server',
+    validarCampoObrigatorioNoBody('refreshToken', {
+        status: 401,
+        code: 'REFRESH_TOKEN_MISSING',
+        message: 'refresh token ausente',
+    }),
+    sessionsController.refreshServer
 )
 
 // ─────────────────────────────────────────────
-// POST /sessions/logout  →  limpa os dois cookies
+// POST /sessions/logout  →  limpa cookies
 // ─────────────────────────────────────────────
 router.post('/logout', sessionsController.logout)
 
