@@ -15,11 +15,8 @@ const { Blob } = require('buffer')
 const { Readable } = require('stream')
 const { pipeline } = require('stream/promises')
 
-const { config } = require('../lib/config')
-const { apiRequest } = require('../lib/http')
+const { apiFetch, apiRequest } = require('../lib/http')
 const { routeAsync, requireSession, requireLevel, apiErrorMessage } = require('../lib/web')
-
-const API_URL = config.services.apiUrl
 const upload = multer({
 	storage: multer.memoryStorage(),
 	limits: { fileSize: 100 * 1024 * 1024 },
@@ -27,7 +24,7 @@ const upload = multer({
 
 const router = express.Router()
 
-function buildTaxonomyOptions(items = []) {
+function buildFilterOptionsFromResources(items = []) {
 	const values = {
 		tipos: new Set(),
 		anos: new Set(),
@@ -120,10 +117,11 @@ router.post(
 			req.file.originalname || 'sip.zip'
 		)
 
-		const response = await fetch(`${API_URL}/api/oais/ingest`, {
+		const response = await apiFetch('/oais/ingest', {
 			method: 'POST',
-			headers: { Authorization: `Bearer ${req.session.token}` },
+			token: req.session.token,
 			body: form,
+			req,
 		})
 
 		let payload = null
@@ -147,10 +145,10 @@ router.post(
 
 // GET /resources/:id/dip  — download DIP (stream)
 router.get('/:id/dip', routeAsync(async (req, res) => {
-	const headers = {}
-	if (req.session?.token) headers.Authorization = `Bearer ${req.session.token}`
-
-	const apiRes = await fetch(`${API_URL}/api/oais/access/${req.params.id}`, { headers })
+	const apiRes = await apiFetch(`/oais/access/${req.params.id}`, {
+		token: req.session?.token,
+		req,
+	})
 
 	if (!apiRes.ok) {
 		let payload = null
@@ -207,7 +205,7 @@ router.get('/', routeAsync(async (req, res) => {
 			tema:    req.query.tema    || '',
 			hashtag: req.query.hashtag || '',
 		},
-		filterOptions: resourcesForFilters.ok ? buildTaxonomyOptions(resourcesForFilters.items) : { tipos: [], anos: [], temas: [], hashtags: [] },
+		filterOptions: resourcesForFilters.ok ? buildFilterOptionsFromResources(resourcesForFilters.items) : { tipos: [], anos: [], temas: [], hashtags: [] },
 		pagination: {
 			page:       list.data?.page       || 1,
 			totalPages: list.data?.totalPages || 1,
@@ -290,7 +288,7 @@ router.get('/:id/edit', requireSession, requireLevel('produtor'), routeAsync(asy
 			dataCriacao: metadataResource.dataCriacao || '',
 			hashtags: Array.isArray(metadataResource.hashtags) ? metadataResource.hashtags.join(', ') : '',
 		},
-		suggestions: resourcesForSuggestions.ok ? buildTaxonomyOptions(resourcesForSuggestions.items) : { tipos: [], anos: [], temas: [], hashtags: [] },
+		suggestions: resourcesForSuggestions.ok ? buildFilterOptionsFromResources(resourcesForSuggestions.items) : { tipos: [], anos: [], temas: [], hashtags: [] },
 	})
 }))
 
@@ -349,6 +347,22 @@ router.post('/:id/edit', requireSession, requireLevel('produtor'), routeAsync(as
 
 	req.flashSuccess('Recurso atualizado com sucesso.')
 	res.redirect(`/resources/${req.params.id}`)
+}))
+
+router.post('/:id/delete', requireSession, requireLevel('produtor'), routeAsync(async (req, res) => {
+	const response = await apiRequest(`/resources/${req.params.id}`, {
+		method: 'DELETE',
+		token: req.session.token,
+		req,
+	})
+
+	if (!response.ok) {
+		req.flashError(apiErrorMessage(response.data, 'Não foi possível eliminar o recurso.'))
+		return res.redirect(`/resources/${req.params.id}`)
+	}
+
+	req.flashSuccess('Recurso eliminado com sucesso.')
+	res.redirect('/resources')
 }))
 
 // POST /resources/:id/ratings  — submeter avaliação

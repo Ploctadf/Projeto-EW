@@ -6,7 +6,7 @@
 
 ## Decisões vigentes (resumo)
 
-- Arquitetura: `gateway` (entrada), `auth` (identidade), `api` (domínio), `interface` (UI).
+- Arquitetura: `nginx` (borda externa), `gateway` (routing de aplicação), `auth` (identidade), `api` (domínio), `interface` (UI).
 - Segurança: autorização sempre no backend; UI apenas apoia UX.
 - Padrão de código: rotas pequenas + helpers partilhados + validação precoce + erros consistentes.
 - Configuração: `docker-compose.yml` com variáveis não sensíveis hardcoded por serviço; segredos por interpolação (`${JWT_SECRET}`, `${SESSION_SECRET}`, `${INTERNAL_SERVICE_TOKEN}`).
@@ -27,6 +27,7 @@
 
 - Fluxo OAIS fechado na UI: upload SIP (produtor/admin) e download DIP (público e privado com autorização).
 - Gateway encaminha páginas HTML de auth (`/auth/login`, `/auth/register`, `/auth/logout`) para a Interface; endpoints JSON continuam no serviço Auth.
+- `nginx` fica exposto ao exterior e reencaminha todo o tráfego para o `gateway`, mantendo o gateway apenas na rede Docker.
 - API aceita token por header, cookie e query string (compatibilidade).
 - Sessão web da interface implementada e configurável por `SESSION_COOKIE_NAME`.
 - API e Auth já publicam/consomem notícias de sistema (submissões, utilizadores e jobs diários) usando token interno.
@@ -122,23 +123,24 @@ Observação: os endpoints em Swagger que exigem autenticação devem receber to
 
 ---
 
-### D-02 — Gateway como único ponto de entrada
+### D-02 — `nginx` como borda externa e `gateway` como entrada lógica
 
 **Estado:** Aprovada e implementada.
 
-**Decisão:** expor externamente só o gateway (rota para API/Auth/Interface).
+**Decisão:** expor externamente só o `nginx`; manter o `gateway` como ponto de entrada lógico para Interface/API/Auth.
 
 **Fundamentação:**
 
-- Centraliza roteamento;
-- Prepara terreno para CORS, rate limit e políticas transversais.
+- Preserva a lógica de routing já implementada no `gateway`, incluindo o conflito `/auth/*`;
+- Coloca uma borda HTTP própria para HTTPS, compressão, limites de upload e futuras políticas transversais.
 
 **Impacto positivo:**
 
 - Menor superfície de ataque externa;
-- Configuração de cliente simplificada.
+- Configuração de cliente simplificada;
+- Menor custo de mudança do que mover todo o routing para `nginx`.
 
-**Evidência no código:** [services/gateway/app.js](../services/gateway/app.js)
+**Evidência no código:** [docker-compose.yml](../docker-compose.yml), [infra/nginx/default.conf](../infra/nginx/default.conf), [services/gateway/app.js](../services/gateway/app.js)
 
 ---
 
@@ -214,7 +216,7 @@ Observação: os endpoints em Swagger que exigem autenticação devem receber to
 
 - login gera JWT;
 - endpoint de verificação usado por outros serviços;
-- endpoint `/auth/me` para perfil autenticado.
+- endpoints de sessão (`/auth/sessions/*`) para verificação e renovação de token.
 
 **Fundamentação:**
 
@@ -337,7 +339,7 @@ Observação: os endpoints em Swagger que exigem autenticação devem receber to
 
 **Estado:** Aprovada e implementada.
 
-**Decisão:** modelos para `Resource`, `Post`, `Comment`, `Rating`, `NewsItem`, `Taxonomy`.
+**Decisão:** modelos para `Resource`, `Post`, `Comment`, `Rating` e `NewsItem`.
 
 **Fundamentação:**
 
@@ -348,7 +350,7 @@ Observação: os endpoints em Swagger que exigem autenticação devem receber to
 - base estável para interface e testes;
 - sem overengineering.
 
-**Evidência no código:** [services/api/models/Resource.js](../services/api/models/Resource.js), [services/api/models/Post.js](../services/api/models/Post.js), [services/api/models/Comment.js](../services/api/models/Comment.js), [services/api/models/Rating.js](../services/api/models/Rating.js), [services/api/models/NewsItem.js](../services/api/models/NewsItem.js), [services/api/models/Taxonomy.js](../services/api/models/Taxonomy.js)
+**Evidência no código:** [services/api/models/Resource.js](../services/api/models/Resource.js), [services/api/models/Post.js](../services/api/models/Post.js), [services/api/models/Comment.js](../services/api/models/Comment.js), [services/api/models/Rating.js](../services/api/models/Rating.js), [services/api/models/NewsItem.js](../services/api/models/NewsItem.js)
 
 ---
 
@@ -584,13 +586,6 @@ Base no gateway: `/auth/*`
 - **Configuração:** `AUTH_CORS_ORIGIN` (ex.: `http://localhost:16020`).
 - **Headers/métodos:** `Content-Type`, `Authorization`, `X-Request-Id`; métodos `GET, POST, PUT, PATCH, DELETE, OPTIONS`.
 
-### 7.2.4 `GET /auth/me`
-
-- **Descrição:** devolve perfil completo do utilizador autenticado.
-- **Auth:** obrigatório (`requireAuth`).
-- **Resposta:** `200 { ok: true, user }`.
-- **Erros típicos:** `401`, `404`.
-
 ### 7.2.5 `GET /auth/users`
 
 - **Descrição:** listagem de utilizadores.
@@ -764,23 +759,7 @@ Base no gateway: `/api/*`
 
 ### 7.3.8 Taxonomia
 
-**Evidência:** [services/api/routes/taxonomy.js](../services/api/routes/taxonomy.js)
-
-#### `GET /api/taxonomy`
-
-- **Auth:** não.
-
-#### `POST /api/taxonomy`
-
-- **Auth:** admin.
-- **Body mínimo:** `tipo`.
-- **Body opcional:** `ano`, `tema`, `hashtag`.
-- **Erros típicos:** `409` em duplicado.
-
-#### `DELETE /api/taxonomy/:id`
-
-- **Auth:** admin.
-- **Validação:** `id` Mongo válido.
+- Endpoint removido do serviço API para simplificação.
 
 ## 7.4 Serviço Interface (rotas web)
 
@@ -914,17 +893,9 @@ Todas as rotas abaixo exigem sessão + perfil `admin`:
 
 ---
 
-## 8.7 Objeto `Taxonomy`
+## 8.7 Modelo de taxonomia (removido)
 
-**Evidência de implementação:** [services/api/models/Taxonomy.js](../services/api/models/Taxonomy.js)
-
-- `tipo` (String, obrigatório)
-- `ano` (Number, opcional)
-- `tema` (String, opcional)
-- `hashtag` (String, opcional)
-- `createdAt` (Date)
-
-**Índice único:** `(tipo, ano, tema, hashtag)`.
+- Modelo removido do serviço API para simplificação.
 
 ---
 
