@@ -1,19 +1,40 @@
 extends ../layout
 
 block content
-  section.w3-card.w3-white.w3-padding.w3-margin-top
-    h1 Administração · Dados
-    p
-      a.w3-button.w3-border(href='/admin/users') Utilizadores
-      a.w3-button.w3-border(href='/admin/news') Notícias
-      a.w3-button.w3-border(href='/admin/data') Dados
+	- const currentAdmin = 'data'
+	section.admin-page
+		header.admin-page-header
+			div
+				p.admin-eyebrow Administração
+				h1 Dados
+				p Gere exportações e importações com um percurso mais seguro e guiado.
+			include _nav.pug
 
-  section.w3-card.w3-white.w3-padding.w3-margin-top
-    h2 Exportar
-    p Descarrega um ficheiro JSON com todos os recursos, taxonomia, noticias, ratings e comentarios.
-    a.w3-button.w3-teal(href='/admin/export') Descarregar dump JSON
+		section.w3-white.secao-card
+			h2 Exportar
+			p.w3-text-grey Por defeito, a exportação descarrega uma cópia completa. Abre os filtros apenas se quiseres exportar uma seleção menor.
+			form(method='GET' action='/admin/data')
+				include data-transfer-filters.pug
+				section.transfer-preview
+					h3 Pré-visualização da exportação
+					p.transfer-preview__main= transferPreview.principal
+					p.transfer-preview__hint= transferPreview.limite
+					if transferPreview.conteudos
+						p.transfer-preview__hint Tipos de conteúdo escolhidos: #{transferPreview.conteudos}.
+					if transferPreview.temFiltrosEspecificos
+						ul.transfer-preview__list
+							each entry in transferPreview.filtrosEspecificos
+								li
+									strong= entry.label + ': '
+									= entry.value
+					else
+						p.transfer-preview__hint Sem filtros específicos adicionais.
+				.conteudo-acoes
+					button.w3-button.w3-border(type='submit') Atualizar pré-visualização
+					button.w3-button.botao-principal(type='submit' formaction='/admin/export') Exportar seleção
+					a.w3-button.w3-border(href='/admin/export') Exportar tudo
 
-  section.w3-card.w3-white.w3-padding.w3-margin-top
-    h2 Importar
-    p Repoe dados a partir de um ficheiro de dump gerado pelo processo de exportacao.
-    a.w3-button.w3-border(href='/admin/import') Ir para o formulário de importação
+		section.w3-white.secao-card
+			h2 Importar
+			p.w3-text-grey Repõe dados a partir de um ficheiro JSON criado na exportação. A importação lê o conteúdo do ficheiro e mostra o resultado no fim.
+			a.w3-button.w3-border(href='/admin/import') Ir para importação

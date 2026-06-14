@@ -1,6 +1,7 @@
 const express = require('express')
 const mongoose = require('mongoose')
 const { randomUUID } = require('crypto')
+const fsp = require('fs/promises')
 const swaggerUi = require('swagger-ui-express')
 const YAML = require('yamljs')
 const cookieParser = require('cookie-parser')
@@ -9,7 +10,10 @@ const helmet = require('helmet')
 const routes = require('./routes')
 const { config } = require('./lib/config')
 const { jsonError } = require('./lib/http')
-const { initSystemNewsTriggers } = require('./lib/systemNewsJob')
+const { initSystemNewsTriggers } = require('./jobs/systemNews')
+const { auditHttpRequests } = require('./audit')
+const { explicitCors } = require('./middleware/cors')
+const { rateLimitApi } = require('./middleware/rateLimit')
 const swaggerDocument = YAML.load('./swagger.yaml')
 
 const app = express()
@@ -28,7 +32,8 @@ app.use(
 	})
 )
 
-app.use(express.json({ limit: '5mb' }))
+app.use(explicitCors)
+app.use(express.json({ limit: config.dataTransfer.jsonBodyLimit }))
 app.use(cookieParser())
 
 app.use((req, res, next) => {
@@ -45,6 +50,8 @@ app.use((req, res, next) => {
 	next()
 })
 
+app.use(rateLimitApi)
+app.use(auditHttpRequests)
 app.use('/api', routes)
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument))
 app.get('/api/openapi.json', (req, res) => {
@@ -65,6 +72,7 @@ app.use((err, req, res, next) => {
 
 async function start() {
 	try {
+		await fsp.mkdir(config.storage.aipDir, { recursive: true })
 		await mongoose.connect(config.mongoUrl)
 		console.log('MongoDB: connected')
 
@@ -73,7 +81,7 @@ async function start() {
 			initSystemNewsTriggers()
 		})
 	} catch (err) {
-		console.error('MongoDB: connection error:', err)
+		console.error('API startup error:', err)
 		process.exit(1)
 	}
 }

@@ -1,19 +1,52 @@
 extends ../layout
 
 block content
-	section.w3-card.w3-white.w3-padding.w3-margin-top
-		h1 Posts
+	- const postCountLabel = items.length === 1 ? '1 publicação' : `${items.length} publicações`
+	- const linkedPosts = items.filter((post) => post && post.resourceId).length
+	- const recentPosts = items.filter((post) => post?.createdAt && (Date.now() - new Date(post.createdAt).getTime()) <= 1000 * 60 * 60 * 24 * 7).length
+	section.pagina-listagem
+		section.page-hero.page-hero--compact.page-hero--single
+			.page-hero__content
+				p.page-eyebrow Comunidade
+				h1 Publicações
+				p.page-hero__lead Conversas ligadas aos recursos, organizadas para leitura rápida e participação simples.
+				.page-actions
+					a.w3-button.botao-claro(href='/resources') Ver recursos
+					if user && (user.role === 'produtor' || user.role === 'admin')
+						a.w3-button.botao-principal(href='/posts/new') Criar nova publicação
 
-		if user && (user.role === 'produtor' || user.role === 'admin')
-			p
-				a.w3-button.w3-border(href='/posts/new') Criar novo post
-
-		if !items.length
-			p Ainda não existem posts.
-		else
-			ul.w3-ul.w3-hoverable
-				each post in items
-					li
-						a(href=`/posts/${post._id}`)= post.titulo
-						span.w3-text-grey.w3-small  · por #{post.autorNome || 'autor desconhecido'}
-
+		section.section-card.feed-section
+			.feed-section__top
+				div
+					h2 Feed da comunidade
+					p.w3-text-grey Publicações recentes, organizadas como conversas curtas.
+				span.feed-count= postCountLabel
+			if !items.length
+				.empty-state
+					p Ainda não existem publicações.
+			else
+				ul.post-feed
+					each post in items
+						- const autor = post.autorNome || 'autor desconhecido'
+						- const inicial = autor.trim().charAt(0).toUpperCase() || 'A'
+						- const conteudo = String(post.conteudo || '').trim()
+						- const resumo = conteudo.length > 180 ? `${conteudo.slice(0, 180)}...` : conteudo
+						li.post-feed__item
+							article.post-card
+								.post-card__avatar= inicial
+								.post-card__body
+									.post-card__meta
+										span Publicação
+										span por #{autor}
+										if post.createdAt
+											time(datetime=post.createdAt)= new Date(post.createdAt).toLocaleString('pt-PT')
+									h2
+										a(href=`/posts/${post._id}`)= post.titulo
+									if post.resourceId
+										div.post-resource-callout
+											span.post-resource-callout__label Recurso associado
+											a.post-resource-callout__link(href=`/resources/${post.resourceId}`) Ver recurso
+									if resumo
+										p= resumo
+									.post-card__footer
+										a.w3-button.botao-claro.post-card__button(href=`/posts/${post._id}`) Abrir conversa

@@ -45,7 +45,7 @@ async function generateUserId(rawInputId, email) {
 }
 
 module.exports.list = () =>
-	User.find({}, { password: 0 }).sort({ nome: 1 }).exec()
+	User.find({ ativo: true }, { password: 0 }).sort({ nome: 1 }).exec()
 
 module.exports.findById = (id) =>
 	User.findOne({ _id: id, ativo: true }, { password: 0 }).exec()
@@ -97,19 +97,31 @@ module.exports.update = async (id, input) => {
 
 	const user = await User.findByIdAndUpdate(id, update, {
 		new: true,
-		runValidators: true,
+		runValidators: false,
 		projection: { password: 0 },
 	})
 	return toPublicUser(user)
 }
 
 module.exports.remove = async (id) => {
-	const user = await User.findByIdAndUpdate(
+	const user = await User.findById(id)
+	if (!user) return null
+
+	const ts = Date.now()
+	const update = {
+		ativo: false,
+		email: `del_${ts}_${user.email}`
+	}
+
+	if (user.googleId) update.googleId = `del_${ts}_${user.googleId}`
+	if (user.facebookId) update.facebookId = `del_${ts}_${user.facebookId}`
+
+	const updatedUser = await User.findByIdAndUpdate(
 		id,
-		{ ativo: false },
-		{ new: true, runValidators: true, projection: { password: 0 } }
+		update,
+		{ new: true, runValidators: false, projection: { password: 0 } }
 	)
-	return toPublicUser(user)
+	return toPublicUser(updatedUser)
 }
 
 module.exports.getStats = async () => {
@@ -119,6 +131,50 @@ module.exports.getStats = async () => {
 	])
 
 	return { totalUsers, totalActiveUsers }
+}
+
+module.exports.exportForTransfer = () =>
+	User.find({}).sort({ nome: 1 }).lean().exec()
+
+module.exports.importForTransfer = async (users) => {
+	const results = { upserted: 0, errors: [] }
+	if (!Array.isArray(users)) return results
+
+	const allowedUpdateFields = [
+		'nome',
+		'email',
+		'password',
+		'googleId',
+		'facebookId',
+		'role',
+		'filiacao',
+		'nivel_acesso',
+		'data_registo',
+		'ultimo_acesso',
+		'ativo',
+	]
+
+	for (const user of users) {
+		try {
+			if (!user?._id) throw new Error('utilizador sem _id')
+
+			const nextUser = {}
+			for (const field of allowedUpdateFields) {
+				if (user[field] !== undefined) nextUser[field] = user[field]
+			}
+
+			await User.findByIdAndUpdate(
+				user._id,
+				{ $set: nextUser },
+				{ upsert: true, new: true, runValidators: false }
+			)
+			results.upserted++
+		} catch (err) {
+			results.errors.push({ id: String(user?._id || ''), message: err.message })
+		}
+	}
+
+	return results
 }
 
 module.exports.login = async (identifier, password) => {
@@ -136,4 +192,39 @@ module.exports.login = async (identifier, password) => {
 	await User.updateOne({ _id: user._id }, { ultimo_acesso: new Date() })
 
 	return { token: signAccessToken(user), user: toPublicUser(user) }
+}
+
+module.exports.oauthLogin = async (provider, providerId, email, nome) => {
+	email = String(email).trim().toLowerCase()
+	if (!email) throw new Error('email é obrigatorio')
+
+	const searchField = provider === 'google' ? 'googleId' : 'facebookId'
+	let user = await User.findOne({
+		$or: [{ [searchField]: providerId }, { email: email }],
+	})
+	
+	let isNew = false
+
+	if (user) {
+		if (!user.ativo) throw new Error('conta desativada')
+		if (!user[searchField]) {
+			user[searchField] = providerId
+			await user.save()
+		}
+	} else {
+		const _id = await generateUserId(null, email)
+		user = new User({
+			_id,
+			nome,
+			email,
+			role: 'consumidor',
+			[searchField]: providerId,
+		})
+		await user.save()
+		isNew = true
+	}
+
+	await User.updateOne({ _id: user._id }, { ultimo_acesso: new Date() })
+
+	return { token: signAccessToken(user), user: toPublicUser(user), isNew }
 }

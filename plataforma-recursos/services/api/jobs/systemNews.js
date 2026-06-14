@@ -1,7 +1,7 @@
 const Resource = require('../models/Resource')
 const Rating = require('../models/Rating')
 const NewsItem = require('../models/NewsItem')
-const { publishNews } = require('./newsPublisher')
+const { publishNews } = require('../lib/newsPublisher')
 
 function stableTop3Signature(items) {
 	return JSON.stringify(
@@ -12,13 +12,6 @@ function stableTop3Signature(items) {
 			ratingTotal: Number(item.ratingTotal || 0),
 		}))
 	)
-}
-
-function stableUsersSignature(counts) {
-	return JSON.stringify({
-		totalUsers: Number(counts?.totalUsers || 0),
-		totalActiveUsers: Number(counts?.totalActiveUsers || 0),
-	})
 }
 
 async function getLatestSystemNews(eventType) {
@@ -48,7 +41,7 @@ async function buildRatingMap() {
 
 async function computeTop3() {
 	const resources = await Resource.find(
-		{},
+		{ 'metadata.resource.visibilidade': 'publico' },
 		{
 			'metadata.resource.titulo': 1,
 			'metadata.resource.tipo': 1,
@@ -114,38 +107,6 @@ async function publishTop3NewsIfChanged() {
 	return { created: result.created, reason: 'changed', item: result.item }
 }
 
-async function publishUsersCountNewsIfChanged(counts) {
-	const normalizedCounts = {
-		totalUsers: Number(counts?.totalUsers || 0),
-		totalActiveUsers: Number(counts?.totalActiveUsers || 0),
-	}
-
-	const signature = stableUsersSignature(normalizedCounts)
-	const latest = await getLatestSystemNews('system.total_users')
-	const latestSignature = stableUsersSignature(latest?.payload || {})
-
-	if (latest && latestSignature === signature) {
-		return { created: false, reason: 'unchanged', item: latest }
-	}
-
-	const now = new Date()
-	const result = await publishNews({
-		tipo: 'system',
-		eventType: 'system.total_users',
-		dedupeKey: `system.total_users:${now.toISOString()}`,
-		titulo: 'Atualizacao de utilizadores da plataforma',
-		conteudo: `O sistema tem agora ${normalizedCounts.totalActiveUsers} utilizadores ativos (${normalizedCounts.totalUsers} no total).`,
-		createdBy: 'system',
-		payload: {
-			generatedAt: now.toISOString(),
-			totalUsers: normalizedCounts.totalUsers,
-			totalActiveUsers: normalizedCounts.totalActiveUsers,
-		},
-	})
-
-	return { created: result.created, reason: 'changed', item: result.item }
-}
-
 function initSystemNewsTriggers() {
 	console.log('[api][system-news] change-driven mode enabled')
 }
@@ -153,5 +114,4 @@ function initSystemNewsTriggers() {
 module.exports = {
 	initSystemNewsTriggers,
 	publishTop3NewsIfChanged,
-	publishUsersCountNewsIfChanged,
 }

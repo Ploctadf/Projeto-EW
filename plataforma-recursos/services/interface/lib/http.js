@@ -3,7 +3,7 @@
  *
  * Camada de comunicação HTTP para os serviços auth e API.
  *
- * NOVO: interceptor de 401
+ * Interceptor de 401
  *   Se um pedido ao auth ou a API devolver 401, tenta renovar o access token chamando
  *   POST /sessions/refresh-server no auth com o refresh token guardado na sessao.
  *   Se a renovação for bem-sucedida, actualiza req.session.token e repete
@@ -24,23 +24,54 @@ const { config } = require('./config')
 const AUTH_URL = config.services.authUrl
 const API_URL = config.services.apiUrl
 
+function resolveServiceName(baseUrl) {
+	if (baseUrl === AUTH_URL) return 'autenticação'
+	if (baseUrl === API_URL) return 'dados'
+	return 'remoto'
+}
+
+function buildNetworkFailurePayload(baseUrl, endpoint, error) {
+	const serviceName = resolveServiceName(baseUrl)
+	const technicalMessage = error instanceof Error ? error.message : String(error || 'Falha de ligação')
+
+	return {
+		message: `O serviço de ${serviceName} está temporariamente indisponível.`,
+		code: 'service_unavailable',
+		details: [
+			{
+				message: `${serviceName}:${endpoint} · ${technicalMessage}`,
+			},
+		],
+	}
+}
+
 // ─── Função base ─────────────────────────────────────────────────────────────
 
-async function requestJson(baseUrl, endpoint, { method = 'GET', token, body } = {}) {
-	const headers = { Accept: 'application/json' }
-	if (body !== undefined) headers['Content-Type'] = 'application/json'
-	if (token) headers.Authorization = `Bearer ${token}`
+async function requestJson(baseUrl, endpoint, { method = 'GET', token, headers = {}, body } = {}) {
+	const requestHeaders = { Accept: 'application/json', ...headers }
+	if (body !== undefined) requestHeaders['Content-Type'] = 'application/json'
+	if (token) requestHeaders.Authorization = `Bearer ${token}`
 
-	const response = await fetch(`${baseUrl}${endpoint}`, {
-		method,
-		headers,
-		body: body !== undefined ? JSON.stringify(body) : undefined,
-	})
+	let response
+	try {
+		response = await fetch(`${baseUrl}${endpoint}`, {
+			method,
+			headers: requestHeaders,
+			body: body !== undefined ? JSON.stringify(body) : undefined,
+		})
+	} catch (error) {
+		return {
+			ok: false,
+			status: 503,
+			data: buildNetworkFailurePayload(baseUrl, endpoint, error),
+			headers: new Headers(),
+		}
+	}
 
 	let payload = null
 	try { payload = await response.json() } catch { payload = null }
 
-	return { ok: response.ok, status: response.status, data: payload }
+	return { ok: response.ok, status: response.status, data: payload, headers: response.headers }
 }
 
 async function requestRaw(baseUrl, endpoint, { method = 'GET', token, headers = {}, body } = {}) {
@@ -52,11 +83,18 @@ async function requestRaw(baseUrl, endpoint, { method = 'GET', token, headers = 
 	if (!hasAcceptHeader) mergedHeaders.Accept = 'application/json'
 	if (token) mergedHeaders.Authorization = `Bearer ${token}`
 
-	return fetch(`${baseUrl}${endpoint}`, {
-		method,
-		headers: mergedHeaders,
-		body,
-	})
+	try {
+		return await fetch(`${baseUrl}${endpoint}`, {
+			method,
+			headers: mergedHeaders,
+			body,
+		})
+	} catch (error) {
+		return new Response(JSON.stringify(buildNetworkFailurePayload(baseUrl, endpoint, error)), {
+			status: 503,
+			headers: { 'content-type': 'application/json' },
+		})
+	}
 }
 
 // ─── Renovação de token ───────────────────────────────────────────────────────
@@ -65,7 +103,7 @@ async function requestRaw(baseUrl, endpoint, { method = 'GET', token, headers = 
  * Tenta chamar POST /sessions/refresh-server no auth.
  *
  * Estrategia adoptada: guardamos o refreshToken na sessao server-side
- * quando o utilizador faz login (ver routes/auth.js).
+ * a partir do cookie Set-Cookie recebido do auth (ver routes/auth.js).
  * Se o campo nao existir, a renovacao falha graciosamente.
  */
 async function tryRefresh(req) {
@@ -74,6 +112,7 @@ async function tryRefresh(req) {
 
 	const result = await requestJson(AUTH_URL, '/sessions/refresh-server', {
 		method: 'POST',
+		headers: { 'X-Internal-Token': config.internal.serviceToken },
 		body: { refreshToken },
 	})
 
@@ -81,9 +120,6 @@ async function tryRefresh(req) {
 		if (result.data.user) {
 			req.session.user = result.data.user
 			if (req.res?.locals) req.res.locals.user = result.data.user
-		}
-		if (result.data.refreshToken) {
-			req.session.refreshToken = result.data.refreshToken
 		}
 		return result.data.token
 	}

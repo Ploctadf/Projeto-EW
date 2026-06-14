@@ -14,8 +14,12 @@ services:
   mongodb:
     image: mongo:7
     container_name: ew2026_mongo
+    environment:
+      - MONGO_INITDB_DATABASE=ew2026
     volumes:
       - mongo_data:/data/db
+      - ./data/povoamento/fixtures.json:/docker-entrypoint-initdb.d/fixtures.json:ro
+      - ./data/povoamento/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
     networks:
       - ew2026-net
 
@@ -33,6 +37,9 @@ services:
       - AUTH_URL=http://auth:16027
       - AUTH_COOKIE_NAME=ew.auth
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+      - API_CORS_ORIGINS=${API_CORS_ORIGINS:-http://localhost:16020}
+      - API_RATE_LIMIT_WINDOW_MS=${API_RATE_LIMIT_WINDOW_MS:-900000}
+      - API_RATE_LIMIT_MAX_REQUESTS=${API_RATE_LIMIT_MAX_REQUESTS:-300}
     depends_on:
       - mongodb
     networks:
@@ -47,6 +54,7 @@ services:
       - PORT=16027
       - MONGO_URL=mongodb://mongodb:27017/ew2026
       - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - API_URL=http://api:16025
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
     depends_on:
@@ -61,10 +69,20 @@ services:
     container_name: ew2026_interface
     environment:
       - PORT=16026
+      - MONGO_URL=mongodb://mongodb:27017/ew2026
       - API_URL=http://api:16025
       - AUTH_URL=http://auth:16027
+      - AUTH_REFRESH_COOKIE_NAME=ew2026_refresh
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
       - SESSION_SECRET=${SESSION_SECRET}
       - SESSION_COOKIE_NAME=ew.sid
+      - SESSION_STORE_COLLECTION=interface_sessions
+      - SESSION_TTL_SECONDS=${SESSION_TTL_SECONDS:-86400}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:16020}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - FACEBOOK_APP_ID=${FACEBOOK_APP_ID}
+      - FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET}
     depends_on:
       - api
       - auth
@@ -83,6 +101,9 @@ services:
       - API_URL=http://api:16025
       - AUTH_URL=http://auth:16027
       - INTERFACE_URL=http://interface:16026
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:16020}
+      - GATEWAY_RATE_LIMIT_WINDOW_MS=${GATEWAY_RATE_LIMIT_WINDOW_MS:-900000}
+      - GATEWAY_RATE_LIMIT_MAX_REQUESTS=${GATEWAY_RATE_LIMIT_MAX_REQUESTS:-500}
     depends_on:
       - api
       - auth
